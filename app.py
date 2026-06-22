@@ -124,12 +124,12 @@ def preparar_solicitud(df):
         df["CANTIDAD_SOLICITADA_LIMPIA"] = 0
 
     df = df[df["CODIGO_LIMPIO"] != ""].copy()
-
     return df
 
 
-def calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia):
+def calcular_prioridad_real(lote_enviar, bodega, farmacia):
     comparacion = []
+    lotes_bodega = set(bodega["LOTE_LIMPIO"].tolist())
 
     for _, fila in bodega.iterrows():
         comparacion.append({
@@ -140,14 +140,18 @@ def calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia):
         })
 
     for _, fila in farmacia.iterrows():
-        comparacion.append({
-            "LOTE": fila["LOTE_LIMPIO"],
-            "FECHA": fila["VENCIMIENTO_LIMPIO"],
-            "CANTIDAD": fila["CANTIDAD_LIMPIA"],
-            "ORIGEN": "FARMACIA"
-        })
+        if fila["LOTE_LIMPIO"] not in lotes_bodega:
+            comparacion.append({
+                "LOTE": fila["LOTE_LIMPIO"],
+                "FECHA": fila["VENCIMIENTO_LIMPIO"],
+                "CANTIDAD": fila["CANTIDAD_LIMPIA"],
+                "ORIGEN": "FARMACIA"
+            })
 
     df_comp = pd.DataFrame(comparacion)
+
+    if df_comp.empty:
+        return 1
 
     df_comp = df_comp.sort_values(
         by=["FECHA", "CANTIDAD"],
@@ -158,7 +162,6 @@ def calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia):
 
     fila_lote = df_comp[
         (df_comp["LOTE"] == lote_enviar) &
-        (df_comp["FECHA"] == fecha_enviar) &
         (df_comp["ORIGEN"] == "BODEGA")
     ]
 
@@ -201,29 +204,28 @@ def seleccionar_lote(codigo, df_bodega, df_farmacia):
         ).iloc[0]
 
     lote_enviar = lote_elegido["LOTE_LIMPIO"]
-    fecha_enviar = lote_elegido["VENCIMIENTO_LIMPIO"]
     cantidad_lote_bodega = lote_elegido["CANTIDAD_LIMPIA"]
 
+    prioridad_real = calcular_prioridad_real(lote_enviar, bodega, farmacia)
+
     if farmacia.empty:
-        prioridad_real = calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia)
         return lote_enviar, cantidad_lote_bodega, f"sale {texto_orden(prioridad_real)}"
 
-    farmacia = farmacia.sort_values(
-        by=["VENCIMIENTO_LIMPIO", "CANTIDAD_LIMPIA"],
-        ascending=[True, True]
-    ).reset_index(drop=True)
+    lotes_farmacia = set(farmacia["LOTE_LIMPIO"].tolist())
+    fechas_farmacia = set(farmacia["VENCIMIENTO_LIMPIO"].tolist())
 
-    lote_farmacia = farmacia.iloc[0]["LOTE_LIMPIO"]
-    fecha_farmacia = farmacia.iloc[0]["VENCIMIENTO_LIMPIO"]
+    fecha_enviar = lote_elegido["VENCIMIENTO_LIMPIO"]
 
-    if lote_farmacia == lote_enviar:
-        observacion = "mismo lote"
+    if lote_enviar in lotes_farmacia:
+        if prioridad_real == 1:
+            observacion = "mismo lote"
+        else:
+            observacion = f"mismo lote que sale {texto_orden(prioridad_real)}"
 
-    elif fecha_farmacia == fecha_enviar:
+    elif fecha_enviar in fechas_farmacia:
         observacion = "misma fecha de vencimiento del lote que está saliendo"
 
     else:
-        prioridad_real = calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia)
         observacion = f"sale {texto_orden(prioridad_real)}"
 
     return lote_enviar, cantidad_lote_bodega, observacion
