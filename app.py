@@ -2,20 +2,13 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(
-    page_title="Control de Rotación IGSS",
-    page_icon="📦",
-    layout="centered"
-)
+st.set_page_config(page_title="Control de Rotación IGSS", page_icon="📦", layout="centered")
 
-st.title("📦 Control de Rotación de Inventario FEFO")
+st.title("📦 Control de Rotación de Inventario")
 st.subheader("Hospital General IGSS Jalapa")
-st.markdown("Carga los archivos de bodega, farmacia y solicitud para generar el despacho correcto de lotes.")
-
-st.sidebar.header("📁 Carga de Documentos")
 
 archivo_bodega = st.sidebar.file_uploader("1. Inventario de Bodega (.xlsx)", type=["xlsx"])
-archivo_farmacia = st.sidebar.file_uploader("2. Existencia de Farmacia (.xlsx)", type=["xlsx"])
+archivo_farmacia = st.sidebar.file_uploader("2. Inventario de Farmacia (.xlsx)", type=["xlsx"])
 archivo_solicitud = st.sidebar.file_uploader("3. Solicitud de Farmacia (.xlsx)", type=["xlsx"])
 
 
@@ -25,7 +18,7 @@ def leer_excel_limpio(archivo, palabras_clave):
     fila_encabezado = 0
     for i, fila in df_sucio.iterrows():
         valores = [str(x).strip().upper() for x in fila.dropna()]
-        if any(any(palabra in valor for palabra in palabras_clave) for valor in valores):
+        if any(any(p in valor for p in palabras_clave) for valor in valores):
             fila_encabezado = i
             break
 
@@ -57,7 +50,7 @@ def normalizar_lote(valor):
     return str(valor).strip().upper()
 
 
-def texto_orden(numero):
+def texto_orden(n):
     textos = {
         1: "primero",
         2: "segundo",
@@ -70,7 +63,7 @@ def texto_orden(numero):
         9: "noveno",
         10: "décimo"
     }
-    return textos.get(numero, f"{numero}°")
+    return textos.get(n, f"{n}°")
 
 
 def preparar_inventario(df):
@@ -80,18 +73,18 @@ def preparar_inventario(df):
     col_vencimiento = buscar_columna(df, ["FECHA VENCIMIENTO", "VENCIMIENTO", "FECHA"])
     col_cantidad = buscar_columna(df, ["CANTIDAD", "EXISTENCIA"])
 
-    columnas_faltantes = []
+    faltantes = []
     if col_codigo is None:
-        columnas_faltantes.append("Código")
+        faltantes.append("Código")
     if col_lote is None:
-        columnas_faltantes.append("Lote")
+        faltantes.append("Lote")
     if col_vencimiento is None:
-        columnas_faltantes.append("Fecha vencimiento")
+        faltantes.append("Fecha de vencimiento")
     if col_cantidad is None:
-        columnas_faltantes.append("Cantidad")
+        faltantes.append("Cantidad")
 
-    if columnas_faltantes:
-        raise Exception(f"Faltan columnas en inventario: {', '.join(columnas_faltantes)}")
+    if faltantes:
+        raise Exception("Faltan columnas: " + ", ".join(faltantes))
 
     df = df.copy()
 
@@ -136,56 +129,74 @@ def preparar_solicitud(df):
 
 
 def seleccionar_lote(codigo, df_bodega, df_farmacia):
-    lotes_bodega = df_bodega[df_bodega["CODIGO_LIMPIO"] == codigo].copy()
+    bodega = df_bodega[df_bodega["CODIGO_LIMPIO"] == codigo].copy()
+    farmacia = df_farmacia[df_farmacia["CODIGO_LIMPIO"] == codigo].copy()
 
-    if lotes_bodega.empty:
-        return "", 0, "Sin stock en bodega"
+    if bodega.empty:
+        return "", 0, "sin stock en bodega"
 
-    # Primero se busca la fecha más próxima
-    fecha_mas_proxima = lotes_bodega["VENCIMIENTO_LIMPIO"].min()
+    bodega = bodega.sort_values(
+        by=["VENCIMIENTO_LIMPIO", "CANTIDAD_LIMPIA"],
+        ascending=[True, True]
+    ).reset_index(drop=True)
 
-    grupo_fecha = lotes_bodega[
-        lotes_bodega["VENCIMIENTO_LIMPIO"] == fecha_mas_proxima
+    bodega["PRIORIDAD"] = bodega.index + 1
+
+    primera_fecha = bodega["VENCIMIENTO_LIMPIO"].min()
+
+    grupo_primera_fecha = bodega[
+        bodega["VENCIMIENTO_LIMPIO"] == primera_fecha
     ].copy()
 
-    lotes_farmacia = df_farmacia[df_farmacia["CODIGO_LIMPIO"] == codigo].copy()
-    lotes_farmacia_set = set(lotes_farmacia["LOTE_LIMPIO"].tolist())
+    lotes_farmacia = set(farmacia["LOTE_LIMPIO"].tolist())
 
-    # Regla especial:
-    # Si farmacia tiene un lote que vence en la fecha más próxima, enviar ese mismo lote.
-    coincidencias_misma_fecha = grupo_fecha[
-        grupo_fecha["LOTE_LIMPIO"].isin(lotes_farmacia_set)
-    ].copy()
+    coincidencia_misma_fecha = grupo_primera_fecha[
+        grupo_primera_fecha["LOTE_LIMPIO"].isin(lotes_farmacia)
+    ]
 
-    if not coincidencias_misma_fecha.empty:
-        lote_elegido = coincidencias_misma_fecha.sort_values(
-            by=["CANTIDAD_LIMPIA"],
+    if not coincidencia_misma_fecha.empty:
+        lote_elegido = coincidencia_misma_fecha.iloc[0]
+    else:
+        lote_elegido = grupo_primera_fecha.sort_values(
+            by="CANTIDAD_LIMPIA",
             ascending=True
         ).iloc[0]
 
-        return (
-            lote_elegido["LOTE_LIMPIO"],
-            lote_elegido["CANTIDAD_LIMPIA"],
-            "mismo lote que está saliendo"
-        )
+    lote_enviar = lote_elegido["LOTE_LIMPIO"]
+    fecha_enviar = lote_elegido["VENCIMIENTO_LIMPIO"]
+    cantidad_enviar = lote_elegido["CANTIDAD_LIMPIA"]
+    prioridad_enviar = int(lote_elegido["PRIORIDAD"])
 
-    # Si farmacia no tiene ningún lote de esa fecha, se usa menor cantidad
-    lote_elegido = grupo_fecha.sort_values(
-        by=["CANTIDAD_LIMPIA"],
-        ascending=True
-    ).iloc[0]
+    if farmacia.empty:
+        return lote_enviar, cantidad_enviar, f"sale {texto_orden(prioridad_enviar)}"
 
-    return (
-        lote_elegido["LOTE_LIMPIO"],
-        lote_elegido["CANTIDAD_LIMPIA"],
-        "sale primero"
-    )
+    farmacia = farmacia.sort_values(
+        by=["VENCIMIENTO_LIMPIO", "CANTIDAD_LIMPIA"],
+        ascending=[True, True]
+    ).reset_index(drop=True)
+
+    lote_farmacia = farmacia.iloc[0]["LOTE_LIMPIO"]
+    fecha_farmacia = farmacia.iloc[0]["VENCIMIENTO_LIMPIO"]
+
+    if lote_farmacia == lote_enviar:
+        observacion = "mismo lote"
+
+    elif fecha_farmacia == fecha_enviar:
+        observacion = "misma fecha de vencimiento del lote que está saliendo"
+
+    elif fecha_enviar < fecha_farmacia:
+        observacion = "sale primero"
+
+    else:
+        observacion = f"sale {texto_orden(prioridad_enviar)}"
+
+    return lote_enviar, cantidad_enviar, observacion
 
 
 if archivo_bodega and archivo_farmacia and archivo_solicitud:
-    if st.button("🚀 Procesar Despacho de Lotes", type="primary", use_container_width=True):
+    if st.button("🚀 Procesar Despacho", type="primary", use_container_width=True):
         try:
-            with st.spinner("Procesando inventarios y aplicando reglas de despacho..."):
+            with st.spinner("Procesando datos..."):
 
                 df_bodega_raw = leer_excel_limpio(
                     archivo_bodega,
@@ -206,60 +217,56 @@ if archivo_bodega and archivo_farmacia and archivo_solicitud:
                 df_farmacia = preparar_inventario(df_farmacia_raw)
                 df_solicitud = preparar_solicitud(df_solicitud_raw)
 
-                lotes_enviar = []
-                cantidades_enviar = []
+                lotes = []
+                cantidades = []
                 observaciones = []
-                existencias_lote = []
+                existencias = []
 
                 for _, fila in df_solicitud.iterrows():
                     codigo = fila["CODIGO_LIMPIO"]
                     cantidad_solicitada = fila["CANTIDAD_SOLICITADA_LIMPIA"]
 
-                    lote, existencia_lote, observacion = seleccionar_lote(
+                    lote, existencia, observacion = seleccionar_lote(
                         codigo,
                         df_bodega,
                         df_farmacia
                     )
 
-                    lotes_enviar.append(lote)
-                    cantidades_enviar.append(cantidad_solicitada)
-                    existencias_lote.append(existencia_lote)
+                    lotes.append(lote)
+                    cantidades.append(cantidad_solicitada)
+                    existencias.append(existencia)
                     observaciones.append(observacion)
 
-                df_resultado = df_solicitud.copy()
-                df_resultado["CANTIDAD ENVIADA"] = cantidades_enviar
-                df_resultado["LOTE A ENVIAR"] = lotes_enviar
-                df_resultado["EXISTENCIA LOTE BODEGA"] = existencias_lote
-                df_resultado["OBSERVACIÓN"] = observaciones
+                resultado = df_solicitud.copy()
+                resultado["CANTIDAD ENVIADA"] = cantidades
+                resultado["LOTE"] = lotes
+                resultado["EXISTENCIA LOTE BODEGA"] = existencias
+                resultado["OBSERVACIÓN"] = observaciones
 
-                columnas_ocultar = [
-                    "CODIGO_LIMPIO",
-                    "CANTIDAD_SOLICITADA_LIMPIA"
-                ]
-
-                df_resultado = df_resultado.drop(
-                    columns=[c for c in columnas_ocultar if c in df_resultado.columns],
+                resultado = resultado.drop(
+                    columns=["CODIGO_LIMPIO", "CANTIDAD_SOLICITADA_LIMPIA"],
                     errors="ignore"
                 )
 
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    df_resultado.to_excel(writer, index=False, sheet_name="Despacho")
 
-                st.success("🎉 Análisis completado correctamente.")
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    resultado.to_excel(writer, index=False, sheet_name="Despacho")
+
+                st.success("✅ Reporte generado correctamente.")
 
                 st.download_button(
-                    label="📥 Descargar Reporte de Despacho",
+                    label="📥 Descargar Reporte",
                     data=output.getvalue(),
                     file_name="Reporte_Despacho_Lotes.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
 
-                st.dataframe(df_resultado, use_container_width=True)
+                st.dataframe(resultado, use_container_width=True)
 
         except Exception as e:
-            st.error(f"Ocurrió un problema: {str(e)}")
+            st.error(f"Ocurrió un error: {str(e)}")
 
 else:
-    st.info("💡 Carga los 3 archivos Excel en la barra lateral para iniciar.")
+    st.info("Carga los 3 archivos Excel para iniciar.")
