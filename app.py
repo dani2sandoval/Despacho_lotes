@@ -4,8 +4,8 @@ import io
 
 st.set_page_config(page_title="Control de Rotación IGSS", page_icon="📦", layout="centered")
 
-st.title("📦 Control de Rotación de Inventario")
-st.subheader("Hospital General IGSS Jalapa")
+st.title("📦 Control de Despacho a Farmacia")
+st.subheader("Bodega IGSS Jalapa")
 
 archivo_bodega = st.sidebar.file_uploader("1. Inventario de Bodega (.xlsx)", type=["xlsx"])
 archivo_farmacia = st.sidebar.file_uploader("2. Inventario de Farmacia (.xlsx)", type=["xlsx"])
