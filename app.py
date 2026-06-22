@@ -128,6 +128,46 @@ def preparar_solicitud(df):
     return df
 
 
+def calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia):
+    comparacion = []
+
+    for _, fila in bodega.iterrows():
+        comparacion.append({
+            "LOTE": fila["LOTE_LIMPIO"],
+            "FECHA": fila["VENCIMIENTO_LIMPIO"],
+            "CANTIDAD": fila["CANTIDAD_LIMPIA"],
+            "ORIGEN": "BODEGA"
+        })
+
+    for _, fila in farmacia.iterrows():
+        comparacion.append({
+            "LOTE": fila["LOTE_LIMPIO"],
+            "FECHA": fila["VENCIMIENTO_LIMPIO"],
+            "CANTIDAD": fila["CANTIDAD_LIMPIA"],
+            "ORIGEN": "FARMACIA"
+        })
+
+    df_comp = pd.DataFrame(comparacion)
+
+    df_comp = df_comp.sort_values(
+        by=["FECHA", "CANTIDAD"],
+        ascending=[True, True]
+    ).reset_index(drop=True)
+
+    df_comp["PRIORIDAD_REAL"] = df_comp.index + 1
+
+    fila_lote = df_comp[
+        (df_comp["LOTE"] == lote_enviar) &
+        (df_comp["FECHA"] == fecha_enviar) &
+        (df_comp["ORIGEN"] == "BODEGA")
+    ]
+
+    if fila_lote.empty:
+        return 1
+
+    return int(fila_lote.iloc[0]["PRIORIDAD_REAL"])
+
+
 def seleccionar_lote(codigo, df_bodega, df_farmacia):
     bodega = df_bodega[df_bodega["CODIGO_LIMPIO"] == codigo].copy()
     farmacia = df_farmacia[df_farmacia["CODIGO_LIMPIO"] == codigo].copy()
@@ -140,35 +180,33 @@ def seleccionar_lote(codigo, df_bodega, df_farmacia):
         ascending=[True, True]
     ).reset_index(drop=True)
 
-    bodega["PRIORIDAD"] = bodega.index + 1
+    primera_fecha_bodega = bodega["VENCIMIENTO_LIMPIO"].min()
 
-    primera_fecha = bodega["VENCIMIENTO_LIMPIO"].min()
-
-    grupo_primera_fecha = bodega[
-        bodega["VENCIMIENTO_LIMPIO"] == primera_fecha
+    grupo_primera_fecha_bodega = bodega[
+        bodega["VENCIMIENTO_LIMPIO"] == primera_fecha_bodega
     ].copy()
 
     lotes_farmacia = set(farmacia["LOTE_LIMPIO"].tolist())
 
-    coincidencia_misma_fecha = grupo_primera_fecha[
-        grupo_primera_fecha["LOTE_LIMPIO"].isin(lotes_farmacia)
+    coincidencia_misma_fecha_bodega = grupo_primera_fecha_bodega[
+        grupo_primera_fecha_bodega["LOTE_LIMPIO"].isin(lotes_farmacia)
     ]
 
-    if not coincidencia_misma_fecha.empty:
-        lote_elegido = coincidencia_misma_fecha.iloc[0]
+    if not coincidencia_misma_fecha_bodega.empty:
+        lote_elegido = coincidencia_misma_fecha_bodega.iloc[0]
     else:
-        lote_elegido = grupo_primera_fecha.sort_values(
+        lote_elegido = grupo_primera_fecha_bodega.sort_values(
             by="CANTIDAD_LIMPIA",
             ascending=True
         ).iloc[0]
 
     lote_enviar = lote_elegido["LOTE_LIMPIO"]
     fecha_enviar = lote_elegido["VENCIMIENTO_LIMPIO"]
-    cantidad_enviar = lote_elegido["CANTIDAD_LIMPIA"]
-    prioridad_enviar = int(lote_elegido["PRIORIDAD"])
+    cantidad_lote_bodega = lote_elegido["CANTIDAD_LIMPIA"]
 
     if farmacia.empty:
-        return lote_enviar, cantidad_enviar, f"sale {texto_orden(prioridad_enviar)}"
+        prioridad_real = calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia)
+        return lote_enviar, cantidad_lote_bodega, f"sale {texto_orden(prioridad_real)}"
 
     farmacia = farmacia.sort_values(
         by=["VENCIMIENTO_LIMPIO", "CANTIDAD_LIMPIA"],
@@ -184,13 +222,11 @@ def seleccionar_lote(codigo, df_bodega, df_farmacia):
     elif fecha_farmacia == fecha_enviar:
         observacion = "misma fecha de vencimiento del lote que está saliendo"
 
-    elif fecha_enviar < fecha_farmacia:
-        observacion = "sale primero"
-
     else:
-        observacion = f"sale {texto_orden(prioridad_enviar)}"
+        prioridad_real = calcular_prioridad_real(lote_enviar, fecha_enviar, bodega, farmacia)
+        observacion = f"sale {texto_orden(prioridad_real)}"
 
-    return lote_enviar, cantidad_enviar, observacion
+    return lote_enviar, cantidad_lote_bodega, observacion
 
 
 if archivo_bodega and archivo_farmacia and archivo_solicitud:
