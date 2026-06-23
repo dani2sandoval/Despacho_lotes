@@ -209,7 +209,7 @@ def seleccionar_lote(codigo, df_bodega, df_farmacia):
     prioridad_real = calcular_prioridad_real(lote_enviar, bodega, farmacia)
 
     if farmacia.empty:
-        return lote_enviar, cantidad_lote_bodega, f"sale {texto_orden(prioridad_real)}"
+        return lote_enviar, cantidad_lote_bodega, "no existencia en farmacia"
 
     lotes_farmacia = set(farmacia["LOTE_LIMPIO"].tolist())
     fechas_farmacia = set(farmacia["VENCIMIENTO_LIMPIO"].tolist())
